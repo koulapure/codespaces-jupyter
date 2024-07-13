@@ -1,0 +1,91 @@
+pip install opencv-python google-cloud-vision spacy requests flask
+python -m spacy download en_core_web_sm
+
+export GOOGLE_APPLICATION_CREDENTIALS="path/to/your/service-account-file.json"
+
+import os
+import io
+from google.cloud import vision
+import spacy
+from flask import Flask, request, jsonify
+
+# Initialize Google Vision API client
+client = vision.ImageAnnotatorClient()
+
+# Initialize spaCy NLP model
+nlp = spacy.load("en_core_web_sm")
+
+# Initialize Flask app
+app = Flask(__name__)
+
+def detect_labels(path):
+    """Detects labels in the file."""
+    with io.open(path, 'rb') as image_file:
+        content = image_file.read()
+
+    image = vision.Image(content=content)
+    response = client.label_detection(image=image)
+    labels = response.label_annotations
+
+    return [label.description for label in labels]
+
+def extract_keywords(text):
+    """Extracts keywords from the text input."""
+    doc = nlp(text)
+    keywords = [chunk.text for chunk in doc.noun_chunks]
+    return keywords
+
+def search_local_shops(product_labels):
+    """Searches for the product in local shops."""
+    # Example local shop inventory (this should be replaced with a real database or API)
+    local_shops = [
+        {"name": "Shop A", "product": "DSLR camera", "distance": "2 km"},
+        {"name": "Shop B", "product": "High-quality camera", "distance": "5 km"}
+    ]
+
+    results = [shop for shop in local_shops if any(label in shop["product"] for label in product_labels)]
+    return results
+
+def find_product(image_path=None, product_idea=None):
+    if image_path:
+        product_labels = detect_labels(image_path)
+    elif product_idea:
+        product_labels = extract_keywords(product_idea)
+    else:
+        return "No input provided"
+
+    search_results = search_local_shops(product_labels)
+    return search_results
+@app.route('/upload_image', methods=['POST'])
+def upload_image():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    if file:
+        file_path = os.path.join("uploads", file.filename)
+        file.save(file_path)
+        results = find_product(image_path=file_path)
+        return jsonify(results), 200
+
+@app.route('/input_idea', methods=['POST'])
+def input_idea():
+    data = request.get_json()
+    if 'idea' not in data:
+        return jsonify({"error": "No idea provided"}), 400
+    idea = data['idea']
+    results = find_product(product_idea=idea)
+    return jsonify(results), 200
+
+if __name__ == '__main__':
+    if not os.path.exists("uploads"):
+        os.makedirs("uploads")
+    app.run(debug=True)
+
+#Run code
+
+python app.py
+curl -X POST -F 'file=@path/to/your/image.jpg' http://localhost:5000/upload_image
+
+curl -X POST -H "Content-Type: application/json" -d '{"idea":"I need a high-quality DSLR camera"}' http://localhost:5000/input_idea
